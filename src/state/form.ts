@@ -1,7 +1,7 @@
 // Passage du formulaire de préparation aux entrées du générateur de plan.
 import { num, parseDuration, parsePace, plannedStartMs } from '../core/format';
-import { looksLikeAidStation } from '../core/gpx';
-import { DEFAULT_MODEL } from '../core/model';
+import { defaultStopSec, looksLikeAidStation } from '../core/gpx';
+import { DEFAULT_MODEL, fatigueForDuration } from '../core/model';
 import type { BuildInput } from '../core/plan';
 import type { AidStation, Course } from '../core/types';
 import type { AidRow, SetupForm } from './types';
@@ -26,9 +26,16 @@ export function formToInput(course: Course | null, f: SetupForm): { input?: Buil
   const flatPace = f.flatPace.trim() ? parsePace(f.flatPace) : undefined;
   if (f.flatPace.trim() && !flatPace) errors.push("Allure plat : format « 5'20 ».");
   const aids: AidStation[] = f.aidStations
-    .map((a) => ({ name: a.name.trim() || 'Ravito', km: num(a.km) ?? NaN, stopSec: num(a.stopSec) ?? 0 }))
+    .map((a) => ({
+      name: a.name.trim() || 'Ravito',
+      km: num(a.km) ?? NaN,
+      stopSec: num(a.stopSec) ?? 0,
+      cutoffClock: a.cutoff?.trim() || undefined,
+    }))
     .filter((a) => isFinite(a.km) && a.km > 0);
   if (course && aids.some((a) => a.km >= course.totalM / 1000)) errors.push('Un ravito est au-delà de l’arrivée.');
+  if (aids.some((a) => a.cutoffClock && !/^\d{1,2}[:hH]\d{2}$/.test(a.cutoffClock)))
+    errors.push('Barrière horaire : format « 14:30 ».');
   if (errors.length || !course || !targetSec) return { errors };
 
   const model = {
@@ -38,6 +45,7 @@ export function formToInput(course: Course | null, f: SetupForm): { input?: Buil
     descentSkill: num(f.descentSkill) ?? DEFAULT_MODEL.descentSkill,
     calibrationF: num(f.calibrationF) ?? DEFAULT_MODEL.calibrationF,
     startDelaySec: num(f.startDelaySec) ?? DEFAULT_MODEL.startDelaySec,
+    fatigue: fatigueForDuration(targetSec),
   };
   return {
     errors,
@@ -53,6 +61,7 @@ export function formToInput(course: Course | null, f: SetupForm): { input?: Buil
         gel0MinBefore: num(f.gel0MinBefore) ?? 15,
         drinkIntervalMin: num(f.drinkIntervalMin) ?? 0,
         watchFactor: num(f.watchFactor) ?? 1,
+        fuelLabel: f.fuelLabel?.trim() || 'Gel',
       },
       athlete: { hrMax, hrRest, hrZones, flatPaceSecPerKm: flatPace ?? undefined, wattsPerMps: num(f.wattsPerMps) },
       model,
@@ -65,5 +74,5 @@ export function formToInput(course: Course | null, f: SetupForm): { input?: Buil
 export function aidStationsFromCourse(course: Course): AidRow[] {
   return course.waypoints
     .filter((w) => w.offTrackM < 300 && looksLikeAidStation(w.name))
-    .map((w) => ({ name: w.name, km: (Math.round(w.km * 100) / 100).toFixed(2).replace('.', ','), stopSec: '45' }));
+    .map((w) => ({ name: w.name, km: (Math.round(w.km * 100) / 100).toFixed(2).replace('.', ','), stopSec: String(defaultStopSec(w.name)), cutoff: '' }));
 }

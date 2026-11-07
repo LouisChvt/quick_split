@@ -11,6 +11,7 @@ import {
   km as fkm,
   plannedStartMs,
 } from '../core/format';
+import { nextCutoff } from '../core/events';
 import { deltaFromAnchor, estimateKm, projectedFinish, tAtKm, windowStatus } from '../core/position';
 import type { Anchor, Plan } from '../core/types';
 import {
@@ -91,8 +92,9 @@ function NoPlan({ goTo }: { goTo: (tab: 'setup') => void }) {
       <Card>
         <H>Bienvenue 👋</H>
         <P>
-          TrailPacer transforme le GPX de ta course et ton objectif en plan de course : allure par phase, repères de passage,
-          gels, et des annonces vocales pendant la course, même écran verrouillé.
+          TrailPacer transforme le GPX de n'importe quelle course (trail court, marathon nature, ultra de plusieurs jours) et ton
+          objectif en plan de course : allure par phase, repères et barrières horaires, nutrition, nuit, et des annonces
+          vocales pendant la course, même écran verrouillé.
         </P>
         <View style={{ height: 12 }} />
         <Btn kind="primary" title="Préparer ma course" onPress={() => goTo('setup')} />
@@ -206,6 +208,8 @@ function RaceView({
   const status = anchor ? windowStatus(plan, anchor.km, anchor.t) : null;
   const deltaColor = !anchor ? t.sub : Math.abs(delta) < 15 ? t.good : delta > 0 ? t.bad : t.good;
   const ageS = anchor ? Math.round((now - anchor.at) / 1000) : null;
+  const cut = nextCutoff(plan, kmNow, delta, startMs);
+  const cutColor = !cut ? t.sub : cut.marginSec < 0 ? t.bad : cut.marginSec < 30 * 60 ? t.warn : t.good;
 
   return (
     <>
@@ -270,6 +274,26 @@ function RaceView({
         )}
       </Card>
 
+      {cut ? (
+        <Card accent={cutColor}>
+          <Label style={{ color: cutColor }}>
+            Barrière {cut.aid.name} · km {fkm(cut.aid.km)} · {clock(cut.cutoffMs)}
+          </Label>
+          <P>
+            {cut.marginSec >= 0 ? (
+              <>
+                Marge <Text style={{ fontWeight: '800' }}>{durHM(cut.marginSec)}</Text> (arrivée prévue {clock(cut.arrivalMs)})
+              </>
+            ) : (
+              <>
+                <Text style={{ fontWeight: '800', color: t.bad }}>Dépassée de {durHM(-cut.marginSec)}</Text> au rythme actuel
+              </>
+            )}
+            {anchor ? '' : ' · estimation sans recalage'}
+          </P>
+        </Card>
+      ) : null}
+
       <Card accent={t.phase[phase.index % t.phase.length]}>
         <Label>
           Phase {phase.index + 1}/{plan.phases.length} · jusqu'au km {fkm(phase.toKm)}
@@ -304,7 +328,7 @@ function RaceView({
         ) : null}
         {nextGel ? (
           <Card style={{ flex: 1 }}>
-            <Label>Prochain gel</Label>
+            <Label>Prochaine prise</Label>
             <P style={{ fontWeight: '800', fontSize: 17 }}>{nextGel.label}</P>
             <P>
               dans <Text style={{ fontWeight: '800' }}>{durHM(nextGel.tSec - elapsed)}</Text>

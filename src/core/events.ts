@@ -2,8 +2,9 @@
 // Deux natures :
 //  - 'time' : déclenché à un temps de course fixe (gels, rappels boisson) ;
 //  - 'km'   : déclenché au passage d'un km ; son heure suit l'écart réel (avance / retard).
-import { clock, clockSpeech, deltaSpeech, durSpeech, km as fkm, pace } from './format';
+import { clock, clockSpeech, deltaSpeech, durSpeech, km as fkm, pace, plannedStartMs } from './format';
 import { tAtKm } from './position';
+import { sunEventsBetween } from './sun';
 import type { Plan, RaceEvent } from './types';
 
 const paceSpeech = (s: number) => {
@@ -31,6 +32,23 @@ function phaseBody(plan: Plan, i: number): string {
     `ressenti ${p.rpe}/10`,
   ].filter(Boolean);
   return `${bits.join(' · ')}. ${p.objective}`;
+}
+
+function cutoffNote(plan: Plan, km: number): string {
+  const a = plan.aidStations.find((x) => Math.abs(x.km - km) < 0.05 && x.cutoffSec != null);
+  const p = plannedStartMs(plan.race.date, plan.race.startTime);
+  return a && p != null ? ` Barrière ${clock(p + a.cutoffSec! * 1000)}.` : '';
+}
+
+/** Prochaine barrière horaire après le km donné, avec sa marge projetée (s, négatif = dépassée). */
+export function nextCutoff(plan: Plan, kmNow: number, delta: number, startMs: number) {
+  const p = plannedStartMs(plan.race.date, plan.race.startTime);
+  if (p == null) return null;
+  const a = plan.aidStations.find((x) => x.cutoffSec != null && x.km > kmNow + 0.05);
+  if (!a) return null;
+  const cutoffMs = p + a.cutoffSec! * 1000;
+  const arrivalMs = startMs + (tAtKm(plan, a.km) + delta) * 1000;
+  return { aid: a, cutoffMs, arrivalMs, marginSec: (cutoffMs - arrivalMs) / 1000 };
 }
 
 export function buildEvents(plan: Plan, startMs: number): RaceEvent[] {
@@ -104,8 +122,10 @@ export function buildEvents(plan: Plan, startMs: number): RaceEvent[] {
       tSec: tAtKm(plan, k),
       km: k,
       title: `${a.name} dans 500 m`,
-      body: `${a.stopSec} s d'arrêt max : remplis, mange, repars.`,
-      speech: `${a.name} dans 500 mètres. ${a.stopSec} secondes d'arrêt maximum : remplis, mange, repars.`,
+      body: `${a.stopSec >= 120 ? `${Math.round(a.stopSec / 60)} min` : `${a.stopSec} s`} d'arrêt max : remplis, mange, repars.`,
+      speech: `${a.name} dans 500 mètres. ${
+        a.stopSec >= 120 ? `${Math.round(a.stopSec / 60)} minutes` : `${a.stopSec} secondes`
+      } d'arrêt maximum : remplis, mange, repars.`,
     });
   });
 
@@ -119,12 +139,46 @@ export function buildEvents(plan: Plan, startMs: number): RaceEvent[] {
         tSec: l.tTarget,
         km: l.km,
         title: `${l.name} · km ${fkm(l.km)}`,
-        body: `Passage prévu ${clock(startMs + l.tTarget * 1000)} (fenêtre ${clock(startMs + l.tFast * 1000)}–${clock(
-          startMs + l.tSlow * 1000,
-        )}).`,
+        body:
+          `Passage prévu ${clock(startMs + l.tTarget * 1000)} (fenêtre ${clock(startMs + l.tFast * 1000)}–${clock(
+            startMs + l.tSlow * 1000,
+          )}).` + cutoffNote(plan, l.km),
         speech: `${l.name}, kilomètre ${fkm(l.km)}.`,
       });
     });
+
+  // nuit et jour : frontale avant le coucher du soleil, rangement au lever
+  const first = plan.course.snap[0];
+  const total = plan.scenarios.slow.totalSec;
+  if (first) {
+    sunEventsBetween(startMs, startMs + total * 1000, first.lat, first.lon).forEach((s, i) => {
+      const t = (s.at - startMs) / 1000;
+      if (s.kind === 'sunset') {
+        const at = Math.max(60, t - 20 * 60);
+        ev.push({
+          id: `night${i}`,
+          kind: 'night',
+          basis: 'time',
+          tSec: at,
+          km: 0,
+          title: `Nuit à ${clock(s.at)}`,
+          body: 'Sors ta frontale maintenant, avant de ne plus voir les appuis.',
+          speech: `La nuit tombe dans ${Math.round((t - at) / 60)} minutes. Sors ta frontale maintenant et couvre-toi si besoin.`,
+        });
+      } else {
+        ev.push({
+          id: `day${i}`,
+          kind: 'day',
+          basis: 'time',
+          tSec: t,
+          km: 0,
+          title: `Lever du soleil · ${clock(s.at)}`,
+          body: 'Le jour se lève : le coup de fatigue de fin de nuit va passer. Mange quelque chose.',
+          speech: 'Le jour se lève. Le coup de fatigue de fin de nuit va passer : mange quelque chose.',
+        });
+      }
+    });
+  }
 
   const finals: [number, string][] = [
     [5, 'Plus que 5 kilomètres. Commence à relancer.'],

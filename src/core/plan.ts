@@ -1,7 +1,7 @@
 // Génération du plan de course complet à partir d'un parcours, d'un objectif et d'un profil coureur.
-import { durHM, km as fkm, pace } from './format';
+import { clock, durHM, km as fkm, pace, plannedStartMs } from './format';
 import { interp } from './geo';
-import { DEFAULT_MODEL, fatigueAt, solveEffort, timeProfile } from './model';
+import { DEFAULT_MODEL, fatigueAt, prepareSegments, solveEffort, timeProfile } from './model';
 import type {
   AidStation,
   Athlete,
@@ -30,7 +30,7 @@ interface PhaseTemplate {
   watch: string[];
 }
 
-export const PHASE_TEMPLATES: PhaseTemplate[] = [
+export const PHASE_TEMPLATES_STANDARD: PhaseTemplate[] = [
   {
     name: 'Départ maîtrisé',
     toFrac: 0.12,
@@ -87,6 +87,80 @@ export const PHASE_TEMPLATES: PhaseTemplate[] = [
   },
 ];
 
+
+/** Ultra (> 6 h) : intensité basse, patience, alimentation, nuit. */
+export const PHASE_TEMPLATES_ULTRA: PhaseTemplate[] = [
+  {
+    name: 'Mise en jambes',
+    toFrac: 0.1,
+    intensity: 0.97,
+    hrr: [0.5, 0.65],
+    rpe: '3–4',
+    objective: 'Partir très en dedans : sur un ultra, chaque minute gagnée ici se paie triple plus tard.',
+    tips: ['Marche toutes les montées, même faciles.', 'Tu dois pouvoir discuter sans effort.'],
+    watch: ["Euphorie du départ : FC trop haute", 'Bouchons dans les singles : patience'],
+  },
+  {
+    name: 'Installation',
+    toFrac: 0.35,
+    intensity: 1.0,
+    hrr: [0.52, 0.68],
+    rpe: '4',
+    objective: 'Trouver un rythme que tu pourrais tenir toute la journée, manger dès maintenant.',
+    tips: ['Mange avant d’avoir faim : toutes les 30 à 45 min.', 'Bâtons : rythme régulier dans les montées.'],
+    watch: ['Hydratation et sel, surtout s’il fait chaud', 'Frottements et échauffements : traite-les tôt'],
+  },
+  {
+    name: 'Cœur de course',
+    toFrac: 0.65,
+    intensity: 1.0,
+    hrr: [0.52, 0.7],
+    rpe: '4–5',
+    objective: 'Avancer, manger, boire. Ravitos efficaces : une liste en tête avant d’arriver.',
+    tips: ['Au ravito : remplis, mange assis 2 min max si besoin, repars.', 'Descentes souples : préserve tes quadriceps.'],
+    watch: ['Coup de moins bien = souvent manque de sucre : mange', 'Nausées : ralentis, eau, aliment salé'],
+  },
+  {
+    name: 'Gestion de la fatigue',
+    toFrac: 0.88,
+    intensity: 1.0,
+    hrr: [0.5, 0.7],
+    rpe: '5–6',
+    objective: 'Tenir le cap malgré la fatigue : la course se gagne en ne s’arrêtant pas.',
+    tips: ['Découpe : vise seulement le prochain ravito.', 'Marche active plutôt que course molle en côte.'],
+    watch: ['Somnolence de nuit : caféine, conversation, mange', 'Lucidité sur le balisage'],
+  },
+  {
+    name: 'Final',
+    toFrac: 1.0,
+    intensity: 1.03,
+    hrr: [0.55, 0.78],
+    rpe: '6–8',
+    objective: 'Lâcher ce qu’il reste quand l’arrivée devient sûre.',
+    tips: ['Relance sur le plat et les descentes roulantes.', 'Savoure : tu y es presque.'],
+    watch: ['Chute par fatigue dans les descentes', 'Dernière prise de sucre 45 min avant la fin'],
+  },
+];
+
+/** Course courte (< 2 h 30) : plus intense. */
+export const PHASE_TEMPLATES_SHORT: PhaseTemplate[] = PHASE_TEMPLATES_STANDARD.map((t) => ({
+  ...t,
+  hrr: [Math.min(0.92, t.hrr[0] + 0.05), Math.min(0.97, t.hrr[1] + 0.04)] as [number, number],
+}));
+
+export type RaceFormat = 'court' | 'standard' | 'ultra';
+
+export function raceFormat(targetSec: number): RaceFormat {
+  if (targetSec < 2.5 * 3600) return 'court';
+  if (targetSec <= 6 * 3600) return 'standard';
+  return 'ultra';
+}
+
+export function phaseTemplates(targetSec: number): PhaseTemplate[] {
+  const f = raceFormat(targetSec);
+  return f === 'ultra' ? PHASE_TEMPLATES_ULTRA : f === 'court' ? PHASE_TEMPLATES_SHORT : PHASE_TEMPLATES_STANDARD;
+}
+
 /** Bornes hautes Z1..Z5 par défaut, en % de FC de réserve. */
 export const DEFAULT_ZONE_HRR = [0.6, 0.75, 0.85, 0.9, 0.95];
 
@@ -133,6 +207,8 @@ export function buildPlan(input: BuildInput): Plan {
     .sort((a, b) => a.km - b.km);
 
   // 1) phases : bornes par fraction, recalées sur un ravito proche
+  const PHASE_TEMPLATES = phaseTemplates(race.targetSec);
+  const format = raceFormat(race.targetSec);
   const bounds: number[] = [];
   let prev = 0;
   PHASE_TEMPLATES.forEach((tpl, i) => {
@@ -157,9 +233,10 @@ export function buildPlan(input: BuildInput): Plan {
   const nGrid = Math.floor(totalM / step) + 1 + (totalM % step > 0 ? 1 : 0);
   const gridM = Array.from({ length: nGrid }, (_, i) => Math.min(i * step, totalM));
   const ds = pts.map((p) => p.d);
+  const seg = prepareSegments(pts, model, aids, intensityAt);
   const mkScenario = (key: Scenario['key'], target: number) => {
-    const { e, reachable } = solveEffort(pts, target, model, aids, intensityAt);
-    const prof = timeProfile(pts, e, model, aids, intensityAt);
+    const { e, reachable } = solveEffort(pts, target, model, aids, intensityAt, seg);
+    const prof = timeProfile(pts, e, model, aids, intensityAt, seg);
     const times = gridM.map((d) => interp(ds, prof.t, d));
     times[times.length - 1] = prof.total;
     return { sc: { key, totalSec: prof.total, effort: e, times } as Scenario, reachable, t: prof.t };
@@ -173,9 +250,23 @@ export function buildPlan(input: BuildInput): Plan {
   const tAtSc = (sc: Scenario, kmv: number) => interp(gridM, sc.times, kmv * 1000);
   const kmAtT = (t: number) => interp(tgt.sc.times, gridM, t) / 1000;
 
+  // barrières horaires : l'heure saisie est rattachée au jour le plus proche du passage prévu
+  const startMs = plannedStartMs(race.date, race.startTime);
+  const resolvedAids: AidStation[] = aids.map((a) => {
+    const m = a.cutoffClock?.trim().match(/^(\d{1,2})[:hH](\d{2})$/);
+    if (!m || startMs == null) return { ...a, cutoffSec: undefined };
+    const passage = startMs + tAt(a.km) * 1000;
+    const d = new Date(passage);
+    d.setHours(+m[1], +m[2], 0, 0);
+    const cands = [-1, 0, 1].map((k) => d.getTime() + k * 86400000);
+    const best = cands.reduce((x, y) => (Math.abs(y - passage) < Math.abs(x - passage) ? y : x));
+    return { ...a, cutoffSec: (best - startMs) / 1000 };
+  });
+
   // 3) profil allégé + trace d'accroche GPS
   const profile: { d: number; ele: number }[] = [];
-  for (let d = 0; d <= totalM; d += 100) profile.push({ d, ele: interp(ds, pts.map((p) => p.ele), d) });
+  const eles = pts.map((p) => p.ele);
+  for (let d = 0; d <= totalM; d += 100) profile.push({ d, ele: interp(ds, eles, d) });
   if (profile[profile.length - 1].d < totalM) profile.push({ d: totalM, ele: pts[pts.length - 1].ele });
   const snap: { d: number; lat: number; lon: number }[] = [];
   let nextD = 0;
@@ -189,23 +280,26 @@ export function buildPlan(input: BuildInput): Plan {
   if (snap[snap.length - 1].d < last.d) snap.push({ d: last.d, lat: last.lat, lon: last.lon });
 
   // 4) montées remarquables + points hauts / bas (zigzag)
-  const { climbs, extremes } = analyseTerrain(profile, course.gainM);
+  const { climbs, extremes } = analyseTerrain(profile, course.gainM, Math.max(6, Math.min(25, Math.round(totalKm / 8))));
 
   // 5) repères
+  const profD = profile.map((p) => p.d);
+  const profE = profile.map((p) => p.ele);
   const landmarks = buildLandmarks(course, aids, extremes, totalKm, (kmv) => ({
     tFast: tAtSc(fast.sc, kmv),
     tTarget: tAt(kmv),
     tSlow: tAtSc(slow.sc, kmv),
-    ele: interp(profile.map((p) => p.d), profile.map((p) => p.ele), kmv * 1000),
+    ele: interp(profD, profE, kmv * 1000),
   }));
 
   // 6) nutrition
   const fuel: FuelItem[] = [];
-  if (race.gel0MinBefore > 0) fuel.push({ id: 'gel0', tSec: -race.gel0MinBefore * 60, label: 'Gel 0 (avant le départ)', km: 0 });
+  const fuelLabel = race.fuelLabel?.trim() || 'Gel';
+  if (race.gel0MinBefore > 0) fuel.push({ id: 'gel0', tSec: -race.gel0MinBefore * 60, label: `${fuelLabel} 0 (avant le départ)`, km: 0 });
   if (race.gelIntervalMin > 0) {
     let k = 1;
     for (let t = race.gelIntervalMin * 60; t < tgt.sc.totalSec - 10 * 60; t += race.gelIntervalMin * 60) {
-      fuel.push({ id: `gel${k}`, tSec: t, label: `Gel ${k}`, km: kmAtT(t) });
+      fuel.push({ id: `gel${k}`, tSec: t, label: `${fuelLabel} ${k}`, km: kmAtT(t) });
       k++;
     }
   }
@@ -264,9 +358,14 @@ export function buildPlan(input: BuildInput): Plan {
           (steep.maxGradePct > model.walkGradePct ? ` — marche au-delà de ${model.walkGradePct} %` : ''),
       );
     }
-    aids
+    resolvedAids
       .filter((a) => a.km > fromKm && a.km <= toKm)
-      .forEach((a) => watch.push(`${a.name} au km ${fkm(a.km)} : ${a.stopSec} s d'arrêt max`));
+      .forEach((a) =>
+        watch.push(
+          `${a.name} au km ${fkm(a.km)} : ${a.stopSec >= 120 ? durHM(a.stopSec) : `${a.stopSec} s`} d'arrêt max` +
+            (a.cutoffSec != null && startMs != null ? ` · barrière ${clock(startMs + a.cutoffSec * 1000)}` : ''),
+        ),
+      );
     const gels = fuel.filter((f) => f.tSec >= tStart && f.tSec < tEnd);
     if (gels.length) watch.push(`${gels.map((g) => g.label).join(', ')} dans cette phase`);
     if (hr) watch.push(`FC > ${hr[1]} plus de 2 min : ralentis`);
@@ -317,10 +416,23 @@ export function buildPlan(input: BuildInput): Plan {
     () => {
       if (!athlete.flatPaceSecPerKm) return undefined;
       const ePred = 1000 / athlete.flatPaceSecPerKm;
-      return timeProfile(pts, ePred, model, aids, intensityAt).total;
+      return timeProfile(pts, ePred, model, aids, intensityAt, seg).total;
     },
     race.targetSec,
   );
+  const withCutoff = resolvedAids.filter((a) => a.cutoffSec != null);
+  if (withCutoff.length) {
+    const margins = withCutoff.map((a) => ({ a, slow: a.cutoffSec! - tAtSc(slow.sc, a.km), tgt: a.cutoffSec! - tAt(a.km) }));
+    const tight = margins.reduce((x, y) => (y.slow < x.slow ? y : x));
+    if (tight.tgt < 0) {
+      feasibility.verdict = 'très ambitieux';
+      feasibility.message += ` ⚠️ Même à l'objectif, la barrière de ${tight.a.name} est dépassée de ${durHM(-tight.tgt)}.`;
+    } else if (tight.slow < 0) {
+      feasibility.message += ` ⚠️ Au rythme lent de la fenêtre, la barrière de ${tight.a.name} serait dépassée de ${durHM(-tight.slow)}.`;
+    } else {
+      feasibility.message += ` Barrière la plus serrée : ${tight.a.name}, marge ${durHM(tight.tgt)} à l'objectif.`;
+    }
+  }
 
   return {
     version: 1,
@@ -340,11 +452,12 @@ export function buildPlan(input: BuildInput): Plan {
     scenarios: { fast: fast.sc, target: tgt.sc, slow: slow.sc },
     phases,
     landmarks,
-    aidStations: aids,
+    aidStations: resolvedAids,
     climbs,
+    format,
     fuel,
     morning: defaultMorning(race),
-    checklist: defaultChecklist(gelCount, aids.length),
+    checklist: defaultChecklist(gelCount, aids.length, format, fuelLabel),
     recovery: [
       'Marche 10 min, ne t’assois pas tout de suite.',
       'Bois 500 ml dans l’heure (eau + sel ou boisson de récup).',
@@ -402,7 +515,7 @@ function assessFeasibility(
 }
 
 /** Montées notables et extrêmes d'altitude via un zigzag à seuil. */
-export function analyseTerrain(profile: { d: number; ele: number }[], gainM: number) {
+export function analyseTerrain(profile: { d: number; ele: number }[], gainM: number, maxExtremes = 6) {
   const H = Math.max(20, Math.min(60, gainM / 15));
   type Ext = { i: number; type: 'high' | 'low' };
   const ext: Ext[] = [];
@@ -479,7 +592,7 @@ export function analyseTerrain(profile: { d: number; ele: number }[], gainM: num
       return { ...x, prom: nb.length ? Math.min(...nb) : 0 };
     })
     .sort((a, b) => b.prom - a.prom)
-    .slice(0, 6)
+    .slice(0, maxExtremes)
     .forEach((x) => extremes.set(x.i, x.type));
   return {
     climbs,
@@ -525,7 +638,7 @@ function buildLandmarks(
 
 export function defaultMorning(race: RaceSettings): { minBefore: number; text: string }[] {
   const items = [
-    { minBefore: 210, text: 'Petit-déjeuner riche en glucides, peu de fibres' },
+    { minBefore: 210, text: 'Dernier vrai repas : glucides, peu de fibres et de graisses' },
     { minBefore: 120, text: 'Dernier grand verre d’eau, puis petites gorgées' },
     { minBefore: 75, text: 'Arrivée sur place : dossard, consigne, toilettes' },
     { minBefore: 40, text: 'Échauffement léger 10 min + quelques accélérations' },
@@ -537,12 +650,23 @@ export function defaultMorning(race: RaceSettings): { minBefore: number; text: s
   return items.sort((a, b) => b.minBefore - a.minBefore);
 }
 
-export function defaultChecklist(gels: number, aidCount: number): string[] {
+export function defaultChecklist(gels: number, aidCount: number, format: RaceFormat = 'standard', fuelLabel = 'Gel'): string[] {
+  const ultra: string[] =
+    format === 'ultra'
+      ? [
+          'Frontale + piles ou batterie de rechange',
+          'Couche chaude et veste imperméable, même si la météo est bonne',
+          'Batterie externe pour le téléphone (GPS sur plusieurs heures)',
+          'Sacs d’allègement / affaires de rechange si l’organisation les transporte',
+          'Crème anti-frottements, pansements ampoules',
+        ]
+      : [];
   return [
+    ...ultra,
     'Dossard + épingles ou porte-dossard',
     'Montre chargée, trace GPX chargée, alerte FC haute réglée',
     'Téléphone chargé à 100 %, plan chargé dans l’app (fonctionne sans réseau)',
-    `Gels : ${gels} prévus + 1 de secours`,
+    `${fuelLabel}s : ${gels} prévus + 1 de secours`,
     `Flasques / gobelet${aidCount ? ` (${aidCount} ravito${aidCount > 1 ? 's' : ''})` : ''}`,
     'Matériel obligatoire du règlement (couverture de survie, sifflet, frontale…)',
     'Tenue adaptée à la météo, chaussures testées',

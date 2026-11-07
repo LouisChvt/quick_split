@@ -14,6 +14,24 @@ export const DEFAULT_FATIGUE: FatigueStep[] = [
   { toFrac: 1.0, f: 1.08 },
 ];
 
+/**
+ * Profil de fatigue selon la durée visée : plus la course est longue, plus le ralentissement
+ * de fin de course est marqué (×1,10 pour 3 h, ×1,24 pour 10 h, plafonné à ×1,35).
+ */
+export function fatigueForDuration(targetSec: number): FatigueStep[] {
+  const h = targetSec / 3600;
+  const end = Math.min(1.35, 1.04 + 0.02 * h);
+  const k = end - 1;
+  return [
+    { toFrac: 0.1, f: h > 6 ? 0.98 : 0.97 },
+    { toFrac: 0.6, f: 1.0 },
+    { toFrac: 0.8, f: 1 + 0.25 * k },
+    { toFrac: 0.9, f: 1 + 0.5 * k },
+    { toFrac: 0.96, f: 1 + 0.75 * k },
+    { toFrac: 1.0, f: end },
+  ];
+}
+
 export const DEFAULT_MODEL: ModelParams = {
   upA: 0.062,
   upB: 0.0005,
@@ -62,6 +80,65 @@ export interface TimeProfile {
 }
 
 /**
+ * Pré-calcul par tronçon de ce qui ne dépend pas de l'effort e :
+ * vitesse de course = e × c[i], vitesse de marche plafond = w[i], temps fixe = extra[i].
+ */
+export interface Segments {
+  ds: Float64Array;
+  c: Float64Array;
+  w: Float64Array;
+  extra: Float64Array;
+}
+
+export function prepareSegments(
+  pts: TrackPoint[],
+  m: ModelParams,
+  aids: AidStation[],
+  intensityAt: (d: number) => number,
+): Segments {
+  const n = pts.length;
+  const total = pts[n - 1].d;
+  const ds = new Float64Array(n);
+  const c = new Float64Array(n);
+  const w = new Float64Array(n);
+  const extra = new Float64Array(n);
+  const delayLen = Math.min(1000, total / 4);
+  const sortedAids = [...aids].sort((a, b) => a.km - b.km);
+  let aidIdx = 0;
+  for (let i = 1; i < n; i++) {
+    const d = pts[i].d - pts[i - 1].d;
+    ds[i] = d;
+    w[i] = Infinity;
+    if (d > 0) {
+      const mid = (pts[i].d + pts[i - 1].d) / 2;
+      const fat = fatigueAt(mid / total, m.fatigue);
+      const g = Math.max(-45, Math.min(45, ((pts[i].ele - pts[i - 1].ele) / d) * 100));
+      const k = intensityAt(mid) / (m.calibrationF * fat);
+      c[i] = g >= 0 ? k / upCost(g, m) : k * descentFactor(g, m.descentSkill);
+      if (g > m.walkGradePct) w[i] = m.walkVamMh / 3600 / (g / 100) / fat;
+      if (pts[i - 1].d < delayLen) extra[i] += (m.startDelaySec * (Math.min(pts[i].d, delayLen) - pts[i - 1].d)) / delayLen;
+    }
+    while (aidIdx < sortedAids.length && sortedAids[aidIdx].km * 1000 <= pts[i].d) {
+      extra[i] += sortedAids[aidIdx].stopSec;
+      aidIdx++;
+    }
+  }
+  return { ds, c, w, extra };
+}
+
+function segTime(s: Segments, i: number, e: number): number {
+  if (s.ds[i] <= 0) return s.extra[i];
+  const v = Math.max(0.2, Math.min(e * s.c[i], s.w[i]));
+  return s.ds[i] / v + s.extra[i];
+}
+
+export function totalTime(s: Segments, e: number): number {
+  let acc = 0;
+  for (let i = 1; i < s.ds.length; i++) acc += segTime(s, i, e);
+  return acc;
+}
+
+/**
  * Temps cumulé sur la trace pour un effort `e` (m/s équivalent plat).
  * `intensityAt(d)` renvoie le multiplicateur d'intensité de la phase au mètre d.
  */
@@ -71,35 +148,14 @@ export function timeProfile(
   m: ModelParams,
   aids: AidStation[],
   intensityAt: (d: number) => number,
+  seg?: Segments,
 ): TimeProfile {
-  const total = pts[pts.length - 1].d;
+  const s = seg ?? prepareSegments(pts, m, aids, intensityAt);
   const t = new Array<number>(pts.length);
   t[0] = 0;
-  const delayLen = Math.min(1000, total / 4);
-  const sortedAids = [...aids].sort((a, b) => a.km - b.km);
-  let aidIdx = 0;
   let acc = 0;
   for (let i = 1; i < pts.length; i++) {
-    const ds = pts[i].d - pts[i - 1].d;
-    if (ds <= 0) {
-      t[i] = acc;
-      continue;
-    }
-    const mid = (pts[i].d + pts[i - 1].d) / 2;
-    const frac = mid / total;
-    const g = Math.max(-45, Math.min(45, ((pts[i].ele - pts[i - 1].ele) / ds) * 100));
-    const fat = fatigueAt(frac, m.fatigue);
-    const vf = (e * intensityAt(mid)) / (m.calibrationF * fat);
-    acc += ds / speedAt(g, vf, fat, m);
-    // bouchon de départ réparti sur le premier kilomètre
-    if (pts[i - 1].d < delayLen) {
-      acc += (m.startDelaySec * (Math.min(pts[i].d, delayLen) - pts[i - 1].d)) / delayLen;
-    }
-    // arrêts aux ravitos
-    while (aidIdx < sortedAids.length && sortedAids[aidIdx].km * 1000 <= pts[i].d) {
-      acc += sortedAids[aidIdx].stopSec;
-      aidIdx++;
-    }
+    acc += segTime(s, i, e);
     t[i] = acc;
   }
   return { t, total: acc };
@@ -112,17 +168,18 @@ export function solveEffort(
   m: ModelParams,
   aids: AidStation[],
   intensityAt: (d: number) => number,
+  seg?: Segments,
 ): { e: number; reachable: boolean } {
+  const s = seg ?? prepareSegments(pts, m, aids, intensityAt);
   let lo = 0.3;
   let hi = 12;
-  const tot = (e: number) => timeProfile(pts, e, m, aids, intensityAt).total;
-  if (tot(hi) > targetSec) return { e: hi, reachable: false };
-  if (tot(lo) < targetSec) return { e: lo, reachable: true };
-  for (let k = 0; k < 60; k++) {
+  if (totalTime(s, hi) > targetSec) return { e: hi, reachable: false };
+  if (totalTime(s, lo) < targetSec) return { e: lo, reachable: true };
+  for (let k = 0; k < 50; k++) {
     const mid = (lo + hi) / 2;
-    if (tot(mid) > targetSec) lo = mid;
+    if (totalTime(s, mid) > targetSec) lo = mid;
     else hi = mid;
-    if (hi - lo < 1e-5) break;
+    if (hi - lo < 1e-6) break;
   }
   return { e: (lo + hi) / 2, reachable: true };
 }

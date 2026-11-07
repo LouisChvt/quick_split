@@ -65,6 +65,8 @@ describe('gpx', () => {
   it('reconnaît les ravitos', () => {
     expect(looksLikeAidStation('Ravito Argilliers')).toBe(true);
     expect(looksLikeAidStation('R2 Castillon')).toBe(true);
+    expect(looksLikeAidStation('Base de vie Courmayeur')).toBe(true);
+    expect(looksLikeAidStation('Aid Station 3')).toBe(true);
     expect(looksLikeAidStation('Belvédère')).toBe(false);
   });
 });

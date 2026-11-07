@@ -25,5 +25,6 @@ export function validatePlan(obj: unknown): Plan {
   p.morning ??= [];
   p.checklist ??= [];
   p.recovery ??= [];
+  p.format ??= 'standard';
   return p;
 }

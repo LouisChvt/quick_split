@@ -6,6 +6,7 @@ export interface RawGpx {
   name?: string;
   points: { lat: number; lon: number; ele: number | null }[];
   waypoints: Waypoint[];
+  warnings: string[];
 }
 
 const attr = (tag: string, name: string): number | null => {
@@ -23,37 +24,84 @@ const decode = (s: string) =>
     .replace(/&apos;|&#39;/g, "'")
     .trim();
 
-function parsePointTags(xml: string, tagName: string) {
-  const out: { lat: number; lon: number; ele: number | null; name?: string }[] = [];
-  const re = new RegExp(`<${tagName}\\b([^>]*?)(?:/>|>([\\s\\S]*?)</${tagName}>)`, 'g');
+type RawPt = { lat: number; lon: number; ele: number | null; name?: string };
+
+/** Points d'un type de balise (trkpt, rtept, wpt), avec ou sans préfixe d'espace de noms. */
+function parsePointTags(xml: string, tagName: string): RawPt[] {
+  const out: RawPt[] = [];
+  const re = new RegExp(`<(?:[\\w-]+:)?${tagName}\\b([^>]*?)(?:/>|>([\\s\\S]*?)</(?:[\\w-]+:)?${tagName}>)`, 'g');
   let m: RegExpExecArray | null;
   while ((m = re.exec(xml))) {
     const lat = attr(m[1], 'lat');
     const lon = attr(m[1], 'lon');
     if (lat == null || lon == null || !isFinite(lat) || !isFinite(lon)) continue;
+    if (Math.abs(lat) > 90 || Math.abs(lon) > 180) continue;
     const inner = m[2] || '';
-    const e = inner.match(/<ele>\s*([-\d.eE+]+)\s*<\/ele>/);
-    const n = inner.match(/<name>([\s\S]*?)<\/name>/);
-    out.push({ lat, lon, ele: e ? parseFloat(e[1]) : null, name: n ? decode(n[1]) : undefined });
+    const e = inner.match(/<(?:[\w-]+:)?ele>\s*([-\d.eE+]+)\s*<\//);
+    const n = inner.match(/<(?:[\w-]+:)?name>([\s\S]*?)<\//);
+    const ele = e ? parseFloat(e[1]) : null;
+    out.push({ lat, lon, ele: ele != null && isFinite(ele) ? ele : null, name: n ? decode(n[1]) : undefined });
   }
   return out;
 }
 
+function blocks(xml: string, tag: string): string[] {
+  const re = new RegExp(`<(?:[\\w-]+:)?${tag}\\b[^>]*>([\\s\\S]*?)</(?:[\\w-]+:)?${tag}>`, 'g');
+  const out: string[] = [];
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(xml))) out.push(m[1]);
+  return out;
+}
+
+const lengthOf = (pts: RawPt[]) => {
+  let d = 0;
+  for (let i = 1; i < pts.length; i++) d += haversine(pts[i - 1].lat, pts[i - 1].lon, pts[i].lat, pts[i].lon);
+  return d;
+};
+
 export function parseGpx(xml: string): RawGpx {
-  if (!/<gpx[\s>]/i.test(xml)) throw new Error("Ce fichier n'est pas un GPX.");
-  let points = parsePointTags(xml, 'trkpt');
-  if (points.length < 2) points = parsePointTags(xml, 'rtept');
+  if (!/<(?:[\w-]+:)?gpx[\s>]/i.test(xml)) throw new Error("Ce fichier n'est pas un GPX.");
+  const warnings: string[] = [];
+  // Un GPX peut contenir plusieurs tracés : tronçons à enchaîner, ou variantes (parcours de repli…).
+  const tracks = blocks(xml, 'trk')
+    .map((b) => parsePointTags(b, 'trkpt'))
+    .filter((t) => t.length >= 2);
+  let points: RawPt[] = [];
+  if (tracks.length === 1) points = tracks[0];
+  else if (tracks.length > 1) {
+    const joins = tracks.slice(1).map((t, i) => {
+      const prev = tracks[i][tracks[i].length - 1];
+      return haversine(prev.lat, prev.lon, t[0].lat, t[0].lon);
+    });
+    if (joins.every((j) => j < 500)) {
+      points = tracks.flat();
+      warnings.push(`${tracks.length} tracés bout à bout ont été enchaînés.`);
+    } else {
+      const longest = tracks.reduce((a, b) => (lengthOf(b) > lengthOf(a) ? b : a));
+      points = longest;
+      warnings.push(
+        `${tracks.length} tracés distincts (variantes ?) : le plus long (${(lengthOf(longest) / 1000).toFixed(1)} km) a été retenu.`,
+      );
+    }
+  }
+  if (points.length < 2) {
+    const routes = blocks(xml, 'rte')
+      .map((b) => parsePointTags(b, 'rtept'))
+      .filter((t) => t.length >= 2);
+    if (routes.length) points = routes.reduce((a, b) => (lengthOf(b) > lengthOf(a) ? b : a));
+  }
   if (points.length < 2) throw new Error('Aucune trace (trkpt / rtept) dans ce GPX.');
   const wpts = parsePointTags(xml, 'wpt').map((w, i) => ({
     name: w.name || `Point ${i + 1}`,
     lat: w.lat,
     lon: w.lon,
   }));
-  const nameMatch = xml.match(/<(?:trk|metadata)>[\s\S]*?<name>([\s\S]*?)<\/name>/);
+  const nameMatch = xml.match(/<(?:[\w-]+:)?(?:trk|metadata)>[\s\S]*?<(?:[\w-]+:)?name>([\s\S]*?)<\//);
   return {
     name: nameMatch ? decode(nameMatch[1]) : undefined,
     points: points.map(({ lat, lon, ele }) => ({ lat, lon, ele })),
     waypoints: wpts,
+    warnings,
   };
 }
 
@@ -62,6 +110,8 @@ export function buildCourse(raw: RawGpx, name?: string, step = 10, smoothM = 50)
   // 1) distances cumulées, en retirant les doublons
   const pts: { d: number; lat: number; lon: number; ele: number }[] = [];
   const hasElevation = raw.points.some((p) => p.ele != null);
+  const warnings = [...(raw.warnings ?? [])];
+  if (!hasElevation) warnings.push("Pas d'altitude dans ce GPX : le profil sera plat et le plan moins fiable. Exporte la trace depuis un outil qui ajoute l'altitude (Visorando, Strava, OpenRunner…).");
   let lastEle = raw.points.find((p) => p.ele != null)?.ele ?? 0;
   let d = 0;
   for (let i = 0; i < raw.points.length; i++) {
@@ -140,6 +190,7 @@ export function buildCourse(raw: RawGpx, name?: string, step = 10, smoothM = 50)
     rawGainM: rawGain,
     hasElevation,
     waypoints,
+    warnings,
   };
 }
 
@@ -161,8 +212,60 @@ export function nearestOnTrack(points: { d: number; lat: number; lon: number }[]
   return best;
 }
 
-const AID_RE = /ravit|ravito|ravitaillement|\baid\b|feed|water|\beau\b|refresh|^r\d+\b|\bcp\d*\b|checkpoint/i;
+const AID_RE =
+  /ravit|ravito|ravitaillement|base de vie|\bbdv\b|refuge|\baid\b|aid station|feed|water|\beau\b|refresh|drop ?bag|life ?base|^r\d+\b|\bcp\d*\b|checkpoint|verpflegung|avituallamiento/i;
+
+/** Arrêt par défaut selon le type de ravito. */
+export function defaultStopSec(name: string): number {
+  return /base de vie|\bbdv\b|life ?base|drop ?bag/i.test(name) ? 600 : 45;
+}
 
 export function looksLikeAidStation(name: string): boolean {
   return AID_RE.test(name);
+}
+
+/** Format compact pour le stockage (une trace de 300 km tient en moins d'1 Mo). */
+export interface PackedCourse {
+  v: 1;
+  name: string;
+  step: number;
+  totalM: number;
+  gainM: number;
+  lossM: number;
+  rawGainM: number;
+  hasElevation: boolean;
+  warnings: string[];
+  waypoints: Course['waypoints'];
+  lat: number[];
+  lon: number[];
+  ele: number[];
+}
+
+export function packCourse(c: Course): PackedCourse {
+  const step = c.points.length > 1 ? c.points[1].d - c.points[0].d : 10;
+  return {
+    v: 1,
+    name: c.name,
+    step,
+    totalM: c.totalM,
+    gainM: c.gainM,
+    lossM: c.lossM,
+    rawGainM: c.rawGainM,
+    hasElevation: c.hasElevation,
+    warnings: c.warnings,
+    waypoints: c.waypoints,
+    lat: c.points.map((p) => Math.round(p.lat * 1e6) / 1e6),
+    lon: c.points.map((p) => Math.round(p.lon * 1e6) / 1e6),
+    ele: c.points.map((p) => Math.round(p.ele * 10) / 10),
+  };
+}
+
+export function unpackCourse(p: PackedCourse): Course {
+  const n = p.lat.length;
+  const points: TrackPoint[] = new Array(n);
+  for (let i = 0; i < n; i++) {
+    points[i] = { d: i === n - 1 ? p.totalM : Math.min(i * p.step, p.totalM), lat: p.lat[i], lon: p.lon[i], ele: p.ele[i] };
+  }
+  const { lat: _a, lon: _b, ele: _c, v: _v, step: _s, ...rest } = p;
+  return { ...rest, points };
 }

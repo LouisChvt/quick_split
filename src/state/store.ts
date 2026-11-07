@@ -3,11 +3,12 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useSyncExternalStore } from 'react';
 import { buildEvents } from '../core/events';
+import { packCourse, unpackCourse, type PackedCourse } from '../core/gpx';
 import type { Plan, RaceEvent } from '../core/types';
 import { validatePlan } from '../core/validate';
 import { DEFAULT_FORM, DEFAULT_PREFS, type Draft, type Prefs, type RaceSession } from './types';
 
-const K = { plan: 'tp.plan.v1', session: 'tp.session.v1', prefs: 'tp.prefs.v1', course: 'tp.course.v1', form: 'tp.form.v1' };
+const K = { plan: 'tp.plan.v1', session: 'tp.session.v1', prefs: 'tp.prefs.v1', course: 'tp.course.v2', form: 'tp.form.v1' };
 
 export interface AppState {
   loaded: boolean;
@@ -51,7 +52,7 @@ export function ensureLoaded(): Promise<void> {
         readJSON<Plan>(K.plan),
         readJSON<RaceSession>(K.session),
         readJSON<Prefs>(K.prefs),
-        readJSON<Draft['course']>(K.course),
+        readJSON<PackedCourse>(K.course),
         readJSON<Draft['form']>(K.form),
       ]);
       let validPlan: Plan | null = null;
@@ -65,7 +66,7 @@ export function ensureLoaded(): Promise<void> {
         plan: validPlan,
         session,
         prefs: { ...DEFAULT_PREFS, ...(prefs ?? {}) },
-        draft: { course: course ?? null, form: { ...DEFAULT_FORM, ...(form ?? {}) } },
+        draft: { course: course?.v === 1 ? unpackCourse(course) : null, form: { ...DEFAULT_FORM, ...(form ?? {}) } },
       };
       emit();
     })();
@@ -119,7 +120,7 @@ export async function setDraft(d: Partial<Draft>) {
   state = { ...state, draft: { ...state.draft, ...d } };
   emit();
   // la trace (lourde) et le formulaire sont stockés à part
-  if ('course' in d) await writeJSON(K.course, state.draft.course);
+  if ('course' in d) await writeJSON(K.course, state.draft.course ? packCourse(state.draft.course) : null);
   if ('form' in d) await writeJSON(K.form, state.draft.form);
 }
 

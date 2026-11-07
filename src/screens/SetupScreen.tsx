@@ -1,7 +1,7 @@
 // Préparation : parcours (GPX), course, ravitos, coureur, nutrition, modèle, partage, réglages de l'app.
 import React, { useEffect, useRef, useState } from 'react';
 import { ScrollView, Text, View } from 'react-native';
-import { demoGpx } from '../core/demo';
+import { demoGpx, demoUltraGpx } from '../core/demo';
 import { durHM, km as fkm, plannedStartMs } from '../core/format';
 import { buildCourse, parseGpx } from '../core/gpx';
 import { buildPlan } from '../core/plan';
@@ -11,7 +11,7 @@ import { testNotification, ensureNotificationPermission } from '../services/noti
 import { configureAudio, say } from '../services/speech';
 import { aidStationsFromCourse, formToInput } from '../state/form';
 import { setDraft, setPlan, setPrefs, useAppState } from '../state/store';
-import type { SetupForm } from '../state/types';
+import type { AidRow, SetupForm } from '../state/types';
 import { Btn, Card, Field, H, Label, P, Row, Seg, Toggle } from '../ui/components';
 import { useTheme } from '../ui/theme';
 
@@ -58,7 +58,7 @@ export function SetupScreen({ onPlanReady }: { onPlanReady: () => void }) {
       setInfo(
         `Trace chargée : ${fkm(c.totalM / 1000)} km, +${Math.round(c.gainM)} m (lissé), ${c.waypoints.length} waypoint(s)` +
           (aids.length ? `, ${aids.length} ravito(s) détecté(s).` : '.') +
-          (c.hasElevation ? '' : ' ⚠️ Pas d’altitude dans ce GPX : le profil sera plat.'),
+          (c.warnings.length ? ` ${c.warnings.length} remarque(s) ci-dessus.` : ''),
       );
     } catch (e) {
       setErrors([(e as Error).message]);
@@ -97,13 +97,25 @@ export function SetupScreen({ onPlanReady }: { onPlanReady: () => void }) {
             {Math.round(course.rawGainM)} m)
           </P>
         ) : (
-          <P sub>Importe le GPX officiel de ta course (fichier .gpx depuis Fichiers, mail, Drive…).</P>
+          <P sub>
+            Importe le GPX de ta course (site de l'organisation, Visorando, OpenRunner, Strava, Garmin, Suunto, Coros…), depuis
+            Fichiers, un mail ou un cloud. Trail court, marathon nature, ultra : tout format convient.
+          </P>
         )}
+        {course?.warnings?.length ? (
+          <View style={{ marginTop: 6 }}>
+            {course.warnings.map((w, i) => (
+              <P key={i} style={{ color: t.warn }}>
+                ⚠️ {w}
+              </P>
+            ))}
+          </View>
+        ) : null}
         <Row style={{ marginTop: 8 }}>
           <Btn
             kind="primary"
             title="Importer un GPX"
-            style={{ flex: 1 }}
+            style={{ flex: 1.4 }}
             onPress={async () => {
               try {
                 const f = await pickTextFile();
@@ -114,15 +126,32 @@ export function SetupScreen({ onPlanReady }: { onPlanReady: () => void }) {
             }}
           />
           <Btn
-            title="Parcours démo"
+            title="Démo 21 km"
             style={{ flex: 1 }}
             onPress={async () => {
               await loadGpxText(demoGpx());
               setForm((f) => ({
                 ...f,
-                raceName: f.raceName || 'Trail démo 21 km',
+                raceName: 'Trail démo 21 km',
                 date: f.date || isoDate(new Date(Date.now() + 86400000)),
-                target: f.target || '2h15',
+                startTime: '09:00',
+                target: '2h15',
+              }));
+            }}
+          />
+          <Btn
+            title="Démo ultra"
+            style={{ flex: 1 }}
+            onPress={async () => {
+              await loadGpxText(demoUltraGpx());
+              setForm((f) => ({
+                ...f,
+                raceName: 'Ultra démo 72 km',
+                date: f.date || isoDate(new Date(Date.now() + 86400000)),
+                startTime: '06:00',
+                target: '15h30',
+                gelIntervalMin: '40',
+                fuelLabel: 'Prise',
               }));
             }}
           />
@@ -166,47 +195,55 @@ export function SetupScreen({ onPlanReady }: { onPlanReady: () => void }) {
       </Card>
 
       <Card>
-        <H>3. Ravitos</H>
-        {form.aidStations.map((a, i) => (
-          <Row key={i} style={{ alignItems: 'flex-end' }}>
-            <Field
-              label="Nom"
-              value={a.name}
-              onChangeText={(v) => setForm((f) => ({ ...f, aidStations: f.aidStations.map((x, j) => (j === i ? { ...x, name: v } : x)) }))}
-              style={{ flex: 2 }}
-            />
-            <Field
-              label="km"
-              value={a.km}
-              keyboardType="decimal-pad"
-              onChangeText={(v) =>
-                setForm((f) => ({ ...f, aidStations: f.aidStations.map((x, j) => (j === i ? { ...x, km: v } : x)) }))
-              }
-              style={{ flex: 1 }}
-            />
-            <Field
-              label="Arrêt s"
-              value={a.stopSec}
-              keyboardType="number-pad"
-              onChangeText={(v) =>
-                setForm((f) => ({ ...f, aidStations: f.aidStations.map((x, j) => (j === i ? { ...x, stopSec: v } : x)) }))
-              }
-              style={{ flex: 1 }}
-            />
-            <Btn
-              title="✕"
-              kind="ghost"
-              style={{ marginBottom: 10 }}
-              onPress={() => setForm((f) => ({ ...f, aidStations: f.aidStations.filter((_, j) => j !== i) }))}
-            />
-          </Row>
-        ))}
+        <H>3. Ravitos et barrières</H>
+        <P sub style={{ marginBottom: 8 }}>
+          Arrêt prévu en secondes (45 pour un ravito rapide, 600 pour une base de vie). Barrière horaire facultative, à l'heure
+          d'horloge.
+        </P>
+        {form.aidStations.map((a, i) => {
+          const set = (patch: Partial<AidRow>) =>
+            setForm((f) => ({ ...f, aidStations: f.aidStations.map((x, j) => (j === i ? { ...x, ...patch } : x)) }));
+          return (
+            <View key={i} style={{ borderTopWidth: i ? 1 : 0, borderTopColor: t.line, paddingTop: i ? 10 : 0 }}>
+              <Row style={{ alignItems: 'flex-end' }}>
+                <Field label="Nom" value={a.name} onChangeText={(v) => set({ name: v })} style={{ flex: 1 }} />
+                <Btn
+                  title="✕"
+                  kind="ghost"
+                  style={{ marginBottom: 10 }}
+                  onPress={() => setForm((f) => ({ ...f, aidStations: f.aidStations.filter((_, j) => j !== i) }))}
+                />
+              </Row>
+              <Row>
+                <Field label="km" value={a.km} keyboardType="decimal-pad" onChangeText={(v) => set({ km: v })} style={{ flex: 1 }} />
+                <Field
+                  label="Arrêt (s)"
+                  value={a.stopSec}
+                  keyboardType="number-pad"
+                  onChangeText={(v) => set({ stopSec: v })}
+                  style={{ flex: 1 }}
+                />
+                <Field
+                  label="Barrière"
+                  value={a.cutoff ?? ''}
+                  placeholder="hh:mm"
+                  keyboardType="numbers-and-punctuation"
+                  onChangeText={(v) => set({ cutoff: v })}
+                  style={{ flex: 1 }}
+                />
+              </Row>
+            </View>
+          );
+        })}
         <Row>
           <Btn
             title="+ Ajouter un ravito"
             style={{ flex: 1 }}
             onPress={() =>
-              setForm((f) => ({ ...f, aidStations: [...f.aidStations, { name: `Ravito ${f.aidStations.length + 1}`, km: '', stopSec: '45' }] }))
+              setForm((f) => ({
+                ...f,
+                aidStations: [...f.aidStations, { name: `Ravito ${f.aidStations.length + 1}`, km: '', stopSec: '45', cutoff: '' }],
+              }))
             }
           />
           {course?.waypoints.length ? (
@@ -257,9 +294,16 @@ export function SetupScreen({ onPlanReady }: { onPlanReady: () => void }) {
 
       <Card>
         <H>5. Nutrition</H>
+        <Field
+          label="Nom des prises"
+          value={form.fuelLabel}
+          onChangeText={up('fuelLabel')}
+          placeholder="Gel"
+          hint="Gel, Barre, Prise… Utilisé dans les annonces."
+        />
         <Row>
-          <Field label="Gel toutes les (min)" value={form.gelIntervalMin} onChangeText={up('gelIntervalMin')} keyboardType="number-pad" style={{ flex: 1 }} />
-          <Field label="Gel 0 avant départ (min)" value={form.gel0MinBefore} onChangeText={up('gel0MinBefore')} keyboardType="number-pad" style={{ flex: 1 }} />
+          <Field label="Une prise toutes les (min)" value={form.gelIntervalMin} onChangeText={up('gelIntervalMin')} keyboardType="number-pad" style={{ flex: 1 }} />
+          <Field label="Prise 0 avant départ (min)" value={form.gel0MinBefore} onChangeText={up('gel0MinBefore')} keyboardType="number-pad" style={{ flex: 1 }} />
         </Row>
         <Field
           label="Rappel « bois » toutes les (min)"

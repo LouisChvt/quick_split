@@ -1,6 +1,6 @@
 // Annonceur : décide quoi dire et quand. Appelé chaque seconde au premier plan,
 // et à chaque position GPS en arrière-plan (seul moment où le JS tourne écran verrouillé).
-import { dueEvents, statusSpeech } from '../core/events';
+import { dueEvents, nextCutoff, statusSpeech } from '../core/events';
 import { clockSpeech, deltaSpeech, durSpeech } from '../core/format';
 import { deltaFromAnchor, estimateKm, projectedFinish, snapToTrack } from '../core/position';
 import { ensureLoaded, getState, raceEvents, setSession } from '../state/store';
@@ -27,12 +27,38 @@ export function tick(now = Date.now()): Promise<void> {
     const delta = deltaFromAnchor(plan, session.anchor);
     const fresh = !!session.anchor && now - session.anchor.at < FRESH_MS;
     const done = new Set(session.done);
+    // longues courses : iOS ne garde que 64 notifications, on complète avant épuisement
+    if (session.scheduledHorizonT != null && elapsed > session.scheduledHorizonT - 1800) {
+      const next = { ...session, scheduledAt: now };
+      const horizon = await scheduleRaceNotifications(plan, next, now).catch(() => null);
+      await setSession({ ...next, scheduledHorizonT: horizon }, 'now');
+      return;
+    }
+    const kmNow = estimateKm(plan, elapsed, session.anchor);
+    const cut = fresh ? nextCutoff(plan, kmNow, delta, session.startMs) : null;
+    const cutTxt = cut
+      ? cut.marginSec < 0
+        ? ` Attention : au rythme actuel, la barrière de ${cut.aid.name} est dépassée de ${durSpeech(-cut.marginSec)}.`
+        : cut.marginSec < 90 * 60
+          ? ` Marge sur la barrière de ${cut.aid.name} : ${durSpeech(cut.marginSec)}.`
+          : ''
+      : '';
+    // alerte unique si une barrière devient serrée (< 20 min)
+    if (cut && cut.marginSec < 20 * 60) {
+      const id = `cutoffwarn-${cut.aid.name}-${cut.aid.km}`;
+      if (!done.has(id)) {
+        say(`Barrière horaire ${cut.aid.name} à ${clockSpeech(cut.cutoffMs)}.${cutTxt}`);
+        done.add(id);
+        await setSession({ ...session, done: [...done] }, 'now');
+        return;
+      }
+    }
     const { due, stale } = dueEvents(raceEvents(plan, session.startMs), elapsed, delta, done);
     if (!due.length && !stale.length) {
       // point de situation périodique
       const every = prefs.statusEveryMin * 60;
       if (every > 0 && fresh && elapsed - (session.lastStatusT ?? 0) >= every) {
-        say(statusSpeech(plan, estimateKm(plan, elapsed, session.anchor), delta, session.startMs));
+        say(statusSpeech(plan, kmNow, delta, session.startMs) + cutTxt);
         await setSession({ ...session, lastStatusT: elapsed }, 'soon');
       }
       return;
@@ -42,7 +68,7 @@ export function tick(now = Date.now()): Promise<void> {
       let txt = e.speech;
       if (e.kind === 'landmark' || e.kind === 'aid') {
         txt += fresh
-          ? ` ${deltaSpeech(delta)}. Arrivée projetée ${durSpeech(projectedFinish(plan, delta))}.`
+          ? ` ${deltaSpeech(delta)}. Arrivée projetée ${durSpeech(projectedFinish(plan, delta))}.${cutTxt}`
           : ` Passage prévu à ${clockSpeech(session.startMs + e.tSec * 1000)}.`;
       }
       parts.push(txt);
@@ -69,7 +95,10 @@ export function onPosition(lat: number, lon: number, accuracy: number | null, ts
       return;
     }
     const est = estimateKm(plan, elapsed, session.anchor);
-    const res = snapToTrack(plan.course.snap, lat, lon, est);
+    // après un long trou sans position, l'estimation a pu dériver : on la pondère moins
+    const lastAt = session.anchor?.at ?? session.startMs;
+    const penalty = ts - lastAt > 20 * 60 * 1000 ? 10 : 40;
+    const res = snapToTrack(plan.course.snap, lat, lon, est, penalty);
     if (!res) {
       await setSession({ ...session, lastGps: { at: ts, km: null, distM: null, accuracy } }, 'soon');
       return;
@@ -80,8 +109,9 @@ export function onPosition(lat: number, lon: number, accuracy: number | null, ts
     const drift = Math.abs(delta - (session.scheduledDelta ?? 0));
     if (drift >= 30 && ts - (session.scheduledAt ?? 0) > 120000) {
       next = { ...next, scheduledDelta: delta, scheduledAt: ts };
+      const horizon = await scheduleRaceNotifications(plan, next, ts).catch(() => null);
+      next = { ...next, scheduledHorizonT: horizon };
       await setSession(next, 'now');
-      await scheduleRaceNotifications(plan, next, ts).catch(() => {});
     } else {
       await setSession(next, 'soon');
     }

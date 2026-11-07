@@ -47,9 +47,13 @@ async function schedule(title: string, body: string, at: number, id: string) {
 }
 
 /** (Re)programme toutes les alertes à venir à partir du départ réel et de l'écart actuel. */
-export async function scheduleRaceNotifications(plan: Plan, session: RaceSession, now = Date.now()) {
+/**
+ * Renvoie l'horizon (temps de course du dernier événement programmé) s'il reste des événements
+ * au-delà de la limite iOS, sinon null.
+ */
+export async function scheduleRaceNotifications(plan: Plan, session: RaceSession, now = Date.now()): Promise<number | null> {
   await Notifications.cancelAllScheduledNotificationsAsync();
-  if (session.finishedAt) return;
+  if (session.finishedAt) return null;
   const delta = deltaFromAnchor(plan, session.anchor);
   const elapsed = (now - session.startMs) / 1000;
   const done = new Set(session.done);
@@ -57,11 +61,12 @@ export async function scheduleRaceNotifications(plan: Plan, session: RaceSession
     .filter((e) => !done.has(e.id))
     .map((e) => ({ e, at: dueAt(e, delta) }))
     .filter((x) => x.at > elapsed + 2)
-    .sort((a, b) => a.at - b.at)
-    .slice(0, MAX_PENDING);
-  for (const { e, at } of upcoming) {
+    .sort((a, b) => a.at - b.at);
+  const batch = upcoming.slice(0, MAX_PENDING);
+  for (const { e, at } of batch) {
     await schedule(e.title, e.body, session.startMs + at * 1000, e.id).catch(() => {});
   }
+  return upcoming.length > MAX_PENDING ? batch[batch.length - 1].at : null;
 }
 
 /** Rappels de la veille et du matin, relatifs à l'heure de départ prévue. */

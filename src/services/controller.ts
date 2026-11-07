@@ -12,8 +12,8 @@ async function reschedule(s: RaceSession) {
   const { plan } = getState();
   if (!plan) return;
   const next = { ...s, scheduledDelta: deltaFromAnchor(plan, s.anchor), scheduledAt: Date.now() };
-  await setSession(next, 'now');
-  await scheduleRaceNotifications(plan, next).catch(() => {});
+  const horizon = await scheduleRaceNotifications(plan, next).catch(() => null);
+  await setSession({ ...next, scheduledHorizonT: horizon }, 'now');
 }
 
 /** Départ réel : toutes les alertes se calent sur cet instant. */

@@ -3,6 +3,7 @@ import React from 'react';
 import { ScrollView, Text, View } from 'react-native';
 import { chrono, clock, durHM, km as fkm, pace, plannedStartMs } from '../core/format';
 import { hrZones } from '../core/plan';
+import { sunEventsBetween } from '../core/sun';
 import { useAppState } from '../state/store';
 import { Bullets, Card, H, Label, P, Row, TileGrid } from '../ui/components';
 import { ElevationProfile } from '../ui/ElevationProfile';
@@ -17,6 +18,10 @@ export function PlanScreen() {
   const verdictColor =
     f.verdict === 'confortable' || f.verdict === 'réaliste' ? t.good : f.verdict === 'ambitieux' ? t.warn : f.verdict === 'inconnu' ? t.sub : t.bad;
   const zones = hrZones(plan.athlete);
+  const planned = plannedStartMs(plan.race.date, plan.race.startTime) ?? base;
+  const first = plan.course.snap[0];
+  const sun = first ? sunEventsBetween(base, base + plan.scenarios.slow.totalSec * 1000, first.lat, first.lon) : [];
+  const FORMAT = { court: 'Format court', standard: 'Format standard', ultra: 'Format ultra' } as const;
 
   return (
     <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: 40 }}>
@@ -24,8 +29,15 @@ export function PlanScreen() {
         <Label>{plan.race.date} · départ {plan.race.startTime}</Label>
         <H style={{ fontSize: 22 }}>{plan.race.name}</H>
         <P>
-          {fkm(plan.course.totalM / 1000)} km · +{Math.round(plan.course.gainM)} m / −{Math.round(plan.course.lossM)} m
+          {fkm(plan.course.totalM / 1000)} km · +{Math.round(plan.course.gainM)} m / −{Math.round(plan.course.lossM)} m ·{' '}
+          {FORMAT[plan.format ?? 'standard']}
         </P>
+        {sun.length ? (
+          <P sub>
+            {sun.map((x) => `${x.kind === 'sunset' ? '🌙 Nuit' : '🌅 Jour'} à ${clock(x.at)}`).join(' · ')} : frontale
+            obligatoire de nuit.
+          </P>
+        ) : null}
         <P>
           Objectif <Text style={{ fontWeight: '800' }}>{chrono(plan.scenarios.target.totalSec)}</Text> · fenêtre{' '}
           {chrono(plan.scenarios.fast.totalSec)} – {chrono(plan.scenarios.slow.totalSec)}
@@ -57,7 +69,7 @@ export function PlanScreen() {
       ))}
 
       <Card>
-        <H>Gels et ravitos</H>
+        <H>Nutrition et ravitos</H>
         {plan.fuel.map((g) => (
           <Row key={g.id} style={{ marginBottom: 4 }}>
             <Text style={{ color: t.accent, width: 60, fontWeight: '800' }}>{clock(base + g.tSec * 1000)}</Text>
@@ -71,7 +83,8 @@ export function PlanScreen() {
           <Row key={i} style={{ marginBottom: 4 }}>
             <Text style={{ color: t.info, width: 60, fontWeight: '800' }}>km {fkm(a.km)}</Text>
             <P style={{ flex: 1 }}>
-              {a.name} · arrêt {a.stopSec} s
+              {a.name} · arrêt {a.stopSec >= 120 ? durHM(a.stopSec) : `${a.stopSec} s`}
+              {a.cutoffSec != null ? ` · barrière ${clock(planned + a.cutoffSec * 1000)}` : ''}
             </P>
           </Row>
         ))}

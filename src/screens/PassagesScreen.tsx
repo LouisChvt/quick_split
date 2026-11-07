@@ -1,7 +1,7 @@
 // Repères de passage avec fenêtres d'horaires. Toucher un repère en course = recalage.
 import React from 'react';
 import { Alert, Pressable, ScrollView, Text, View } from 'react-native';
-import { chrono, clock, km as fkm, plannedStartMs } from '../core/format';
+import { chrono, clock, clockRel, km as fkm, plannedStartMs } from '../core/format';
 import { estimateKm } from '../core/position';
 import type { LandmarkKind } from '../core/types';
 import { recalibrate } from '../services/controller';
@@ -26,6 +26,8 @@ export function PassagesScreen({ now }: { now: number }) {
   const running = !!session && !session.finishedAt;
   const base = running ? session!.startMs : plannedStartMs(plan.race.date, plan.race.startTime) ?? now;
   const kmNow = running ? estimateKm(plan, (now - session!.startMs) / 1000, session!.anchor) : -1;
+  const planned = plannedStartMs(plan.race.date, plan.race.startTime) ?? base;
+  const cutoffOf = (km: number) => plan.aidStations.find((a) => Math.abs(a.km - km) < 0.05)?.cutoffSec;
 
   return (
     <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: 40 }}>
@@ -71,10 +73,21 @@ export function PassagesScreen({ now }: { now: number }) {
                 <Label style={{ marginBottom: 0 }}>
                   km {fkm(l.km)} · alt. {Math.round(l.ele)} m
                 </Label>
+                {cutoffOf(l.km) != null ? (
+                  <Text
+                    style={{
+                      color: cutoffOf(l.km)! < l.tSlow + (base - planned) / 1000 ? t.bad : t.warn,
+                      fontSize: 12,
+                      fontWeight: '700',
+                    }}
+                  >
+                    Barrière {clockRel(planned + cutoffOf(l.km)! * 1000, planned)}
+                  </Text>
+                ) : null}
               </View>
               <View style={{ alignItems: 'flex-end' }}>
                 <Text style={{ color: t.text, fontWeight: '900', fontSize: 20, fontVariant: ['tabular-nums'] }}>
-                  {clock(base + l.tTarget * 1000)}
+                  {clockRel(base + l.tTarget * 1000, base)}
                 </Text>
                 <Text style={{ color: t.sub, fontSize: 12, fontVariant: ['tabular-nums'] }}>
                   {clock(base + l.tFast * 1000)}–{clock(base + l.tSlow * 1000)} · {chrono(l.tTarget)}

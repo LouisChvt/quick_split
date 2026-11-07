@@ -24,6 +24,8 @@ export interface Course {
   lossM: number;
   rawGainM: number;
   hasElevation: boolean;
+  /** Remarques de lecture du GPX (tracés multiples, pas d'altitude…). */
+  warnings: string[];
   waypoints: (Waypoint & { km: number; offTrackM: number })[];
 }
 
@@ -32,6 +34,10 @@ export interface AidStation {
   km: number;
   /** Arrêt prévu, en secondes. */
   stopSec: number;
+  /** Barrière horaire saisie, heure d'horloge « HH:MM » (optionnel). */
+  cutoffClock?: string;
+  /** Barrière résolue : secondes après le départ prévu (calculé par le plan). */
+  cutoffSec?: number;
 }
 
 export interface FatigueStep {
@@ -86,6 +92,8 @@ export interface RaceSettings {
   drinkIntervalMin: number;
   /** La montre affiche X km quand la trace en fait 1 (ex. 0.98). */
   watchFactor: number;
+  /** Nom des prises (« Gel », « Barre », « Prise »…). */
+  fuelLabel?: string;
 }
 
 export interface Scenario {
@@ -184,6 +192,8 @@ export interface Plan {
   landmarks: Landmark[];
   aidStations: AidStation[];
   climbs: Climb[];
+  /** court (< 2h30), standard, ultra (> 6 h) : adapte phases, cibles et conseils. */
+  format: 'court' | 'standard' | 'ultra';
   fuel: FuelItem[];
   morning: MorningItem[];
   checklist: string[];
@@ -211,7 +221,7 @@ export interface Anchor {
 
 export interface RaceEvent {
   id: string;
-  kind: 'start' | 'gel' | 'drink' | 'aidSoon' | 'aid' | 'phase' | 'landmark' | 'final';
+  kind: 'start' | 'gel' | 'drink' | 'aidSoon' | 'aid' | 'phase' | 'landmark' | 'final' | 'night' | 'day';
   /** 'time' = déclenché au temps de course ; 'km' = au passage du km (décalé par l'écart). */
   basis: 'time' | 'km';
   tSec: number;

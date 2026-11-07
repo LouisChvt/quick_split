@@ -129,3 +129,14 @@ export function countdown(ms: number): string {
   if (s >= 60) return `dans ${Math.ceil(s / 60)} min`;
   return `dans ${Math.max(0, s)} s`;
 }
+
+/** Heure avec le jour relatif au départ si besoin : « 3h12 » ou « J+1 3h12 ». */
+export function clockRel(epochMs: number, refMs: number): string {
+  const a = new Date(epochMs);
+  const b = new Date(refMs);
+  const days = Math.round(
+    (new Date(a.getFullYear(), a.getMonth(), a.getDate()).getTime() - new Date(b.getFullYear(), b.getMonth(), b.getDate()).getTime()) /
+      86400000,
+  );
+  return days > 0 ? `J+${days} ${clock(epochMs)}` : clock(epochMs);
+}

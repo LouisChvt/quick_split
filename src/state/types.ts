@@ -5,6 +5,8 @@ export interface AidRow {
   name: string;
   km: string;
   stopSec: string;
+  /** Barrière horaire « HH:MM » (vide = aucune). */
+  cutoff: string;
 }
 
 /** État d'une course en cours (persisté : survit à un redémarrage de l'app). */
@@ -21,6 +23,8 @@ export interface RaceSession {
   /** Écart utilisé lors de la dernière programmation des notifications. */
   scheduledDelta?: number;
   scheduledAt?: number;
+  /** Temps de course du dernier événement programmé quand il en reste d'autres (limite iOS de 64). */
+  scheduledHorizonT?: number | null;
   finishedAt?: number;
 }
 
@@ -66,6 +70,7 @@ export interface SetupForm {
   descentSkill: string;
   calibrationF: string;
   watchFactor: string;
+  fuelLabel: string;
   aidStations: AidRow[];
 }
 
@@ -94,5 +99,6 @@ export const DEFAULT_FORM: SetupForm = {
   descentSkill: '1',
   calibrationF: '1',
   watchFactor: '1',
+  fuelLabel: 'Gel',
   aidStations: [],
 };

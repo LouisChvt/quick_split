@@ -1,0 +1,77 @@
+{
+  "expo": {
+    "name": "TrailPacer",
+    "slug": "trailpacer",
+    "scheme": "trailpacer",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "automatic",
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "app.trailpacer",
+      "infoPlist": {
+        "UIBackgroundModes": [
+          "location",
+          "audio"
+        ],
+        "NSLocationWhenInUseUsageDescription": "TrailPacer utilise ta position pour te situer sur le parcours et calculer ton avance ou ton retard.",
+        "NSLocationAlwaysAndWhenInUseUsageDescription": "Autorise « Toujours » pour que les annonces vocales et le recalage continuent écran verrouillé pendant la course.",
+        "ITSAppUsesNonExemptEncryption": false
+      }
+    },
+    "android": {
+      "package": "app.trailpacer",
+      "adaptiveIcon": {
+        "backgroundColor": "#0A0E13",
+        "foregroundImage": "./assets/android-icon-foreground.png",
+        "backgroundImage": "./assets/android-icon-background.png",
+        "monochromeImage": "./assets/android-icon-monochrome.png"
+      },
+      "permissions": [
+        "ACCESS_COARSE_LOCATION",
+        "ACCESS_FINE_LOCATION",
+        "ACCESS_BACKGROUND_LOCATION",
+        "FOREGROUND_SERVICE",
+        "FOREGROUND_SERVICE_LOCATION",
+        "POST_NOTIFICATIONS",
+        "WAKE_LOCK"
+      ],
+      "predictiveBackGestureEnabled": false,
+      "blockedPermissions": [
+        "android.permission.RECORD_AUDIO"
+      ]
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "plugins": [
+      [
+        "expo-location",
+        {
+          "locationAlwaysAndWhenInUsePermission": "Autorise « Toujours » pour que les annonces vocales et le recalage continuent écran verrouillé pendant la course.",
+          "isIosBackgroundLocationEnabled": true,
+          "isAndroidBackgroundLocationEnabled": true,
+          "isAndroidForegroundServiceEnabled": true,
+          "locationAlwaysPermission": "Autorise « Toujours » pour que les annonces vocales et le recalage continuent écran verrouillé pendant la course.",
+          "locationWhenInUsePermission": "TrailPacer utilise ta position pour te situer sur le parcours et calculer ton avance ou ton retard.",
+          "motionUsagePermission": false
+        }
+      ],
+      [
+        "expo-notifications",
+        {
+          "color": "#3DDC97"
+        }
+      ],
+      [
+        "expo-audio",
+        {
+          "microphonePermission": false,
+          "enableBackgroundPlayback": true
+        }
+      ],
+      "expo-sharing"
+    ]
+  }
+}

@@ -11,14 +11,15 @@ import { tick } from './src/services/announcer';
 import { resumeIfRunning } from './src/services/controller';
 import { setupNotifications } from './src/services/notifications';
 import { ensureLoaded, getState, useAppState } from './src/state/store';
-import { useTheme } from './src/ui/theme';
+import { Icon, type IconName } from './src/ui/Icon';
+import { alpha, useTheme } from './src/ui/theme';
 
 type Tab = 'now' | 'passages' | 'plan' | 'setup';
-const TABS: { key: Tab; label: string; icon: string }[] = [
-  { key: 'now', label: 'Course', icon: '⏱' },
-  { key: 'passages', label: 'Passages', icon: '📍' },
-  { key: 'plan', label: 'Plan', icon: '🗺' },
-  { key: 'setup', label: 'Préparer', icon: '⚙️' },
+const TABS: { key: Tab; label: string; icon: IconName }[] = [
+  { key: 'now', label: 'Course', icon: 'timer' },
+  { key: 'passages', label: 'Passages', icon: 'pin' },
+  { key: 'plan', label: 'Plan', icon: 'map' },
+  { key: 'setup', label: 'Préparer', icon: 'sliders' },
 ];
 
 export default function App() {
@@ -80,22 +81,33 @@ function Root() {
         {tab === 'setup' && <SetupScreen onPlanReady={() => setTab('plan')} />}
       </View>
       <SafeAreaView edges={['bottom']} style={{ backgroundColor: t.card, borderTopWidth: 1, borderTopColor: t.line }}>
-        <View style={{ flexDirection: 'row' }}>
+        <View style={{ flexDirection: 'row', paddingHorizontal: 8, paddingTop: 6, paddingBottom: 4 }}>
           {visibleTabs.map((x) => {
             const on = x.key === tab;
+            const c = on ? t.text : t.faint;
             return (
               <Pressable
                 key={x.key}
                 onPress={() => setTab(x.key)}
-                style={{ flex: 1, alignItems: 'center', paddingVertical: 8 }}
+                style={{ flex: 1, alignItems: 'center', paddingVertical: 4 }}
                 accessibilityRole="tab"
+                accessibilityLabel={x.label}
                 accessibilityState={{ selected: on }}
               >
-                <Text style={{ fontSize: 20, opacity: on ? 1 : 0.55 }}>{x.icon}</Text>
-                <Text style={{ fontSize: 12, fontWeight: on ? '800' : '600', color: on ? t.accent : t.sub }}>
-                  {x.label}
-                  {x.key === 'now' && running ? ' ●' : ''}
-                </Text>
+                <View
+                  style={{
+                    paddingHorizontal: 18,
+                    paddingVertical: 5,
+                    borderRadius: 999,
+                    backgroundColor: on ? alpha(t.accent, t.dark ? 0.18 : 0.45) : 'transparent',
+                  }}
+                >
+                  <Icon name={x.icon} size={22} color={on ? (t.dark ? t.accent : t.text) : c} stroke={on ? 2.3 : 2} />
+                  {x.key === 'now' && running ? (
+                    <View style={{ position: 'absolute', top: 3, right: 12, width: 8, height: 8, borderRadius: 4, backgroundColor: t.bad }} />
+                  ) : null}
+                </View>
+                <Text style={{ fontSize: 11, marginTop: 3, fontWeight: on ? '800' : '600', color: c }}>{x.label}</Text>
               </Pressable>
             );
           })}

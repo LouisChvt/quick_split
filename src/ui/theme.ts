@@ -1,6 +1,10 @@
 import { useColorScheme } from 'react-native';
 import { useAppState } from '../state/store';
 
+/**
+ * Charte TrailPacer : fond « nuit de montagne », accent citron vert très lisible en plein soleil
+ * comme de nuit, chiffres en gras tabulaires façon montre de sport.
+ */
 export interface Theme {
   dark: boolean;
   bg: string;
@@ -8,9 +12,14 @@ export interface Theme {
   card2: string;
   text: string;
   sub: string;
+  faint: string;
   line: string;
+  /** Remplissage des boutons et indicateurs principaux. */
   accent: string;
+  /** Texte posé sur `accent`. */
   accentText: string;
+  /** Accent utilisé comme couleur de texte sur le fond. */
+  accentInk: string;
   good: string;
   warn: string;
   bad: string;
@@ -20,37 +29,49 @@ export interface Theme {
 
 const dark: Theme = {
   dark: true,
-  bg: '#0A0E13',
-  card: '#141A22',
-  card2: '#1C2430',
-  text: '#F3F6F9',
-  sub: '#98A6B5',
-  line: '#283240',
-  accent: '#3DDC97',
-  accentText: '#04150D',
-  good: '#3DDC97',
-  warn: '#FFB547',
-  bad: '#FF6B6B',
-  info: '#5AB2FF',
-  phase: ['#5AB2FF', '#3DDC97', '#C792EA', '#FFB547', '#FF6B6B'],
+  bg: '#0B0E12',
+  card: '#151A21',
+  card2: '#1F252E',
+  text: '#F2F4F7',
+  sub: '#8D97A5',
+  faint: '#5B6573',
+  line: '#262D37',
+  accent: '#C8F03C',
+  accentText: '#0B0E12',
+  accentInk: '#C8F03C',
+  good: '#4ADE80',
+  warn: '#FBBF24',
+  bad: '#F87171',
+  info: '#60A5FA',
+  phase: ['#60A5FA', '#4ADE80', '#C084FC', '#FBBF24', '#F87171'],
 };
 
 const light: Theme = {
   dark: false,
-  bg: '#F3F5F8',
+  bg: '#F3F4EF',
   card: '#FFFFFF',
-  card2: '#EDF1F5',
-  text: '#0D131A',
-  sub: '#566475',
-  line: '#D9E0E7',
-  accent: '#0B9B63',
-  accentText: '#FFFFFF',
-  good: '#0B9B63',
-  warn: '#B86E00',
-  bad: '#D63B3B',
-  info: '#1F6FC5',
-  phase: ['#1F6FC5', '#0B9B63', '#8E44C5', '#B86E00', '#D63B3B'],
+  card2: '#ECEEE7',
+  text: '#12161C',
+  sub: '#5E6772',
+  faint: '#98A0A9',
+  line: '#E1E4DB',
+  accent: '#C8F03C',
+  accentText: '#12161C',
+  accentInk: '#4D7C0F',
+  good: '#15803D',
+  warn: '#B45309',
+  bad: '#DC2626',
+  info: '#2563EB',
+  phase: ['#2563EB', '#15803D', '#9333EA', '#B45309', '#DC2626'],
 };
+
+/** Couleur hexadécimale #RRGGBB avec une opacité (0 à 1). */
+export function alpha(hex: string, a: number): string {
+  const v = Math.round(Math.max(0, Math.min(1, a)) * 255)
+    .toString(16)
+    .padStart(2, '0');
+  return hex.length === 7 ? hex + v : hex;
+}
 
 export function useTheme(): Theme {
   const scheme = useColorScheme();
